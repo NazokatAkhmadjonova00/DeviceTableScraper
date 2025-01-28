@@ -1,25 +1,207 @@
-﻿
-Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 16
-VisualStudioVersion = 16.0.29102.190
-MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WebScraperNew", "WebScraperNew\WebScraperNew.csproj", "{430E5D62-521E-42BC-859B-58319305F826}"
-EndProject
-Global
-	GlobalSection(SolutionConfigurationPlatforms) = preSolution
-		Debug|Any CPU = Debug|Any CPU
-		Release|Any CPU = Release|Any CPU
-	EndGlobalSection
-	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{430E5D62-521E-42BC-859B-58319305F826}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{430E5D62-521E-42BC-859B-58319305F826}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{430E5D62-521E-42BC-859B-58319305F826}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{430E5D62-521E-42BC-859B-58319305F826}.Release|Any CPU.Build.0 = Release|Any CPU
-	EndGlobalSection
-	GlobalSection(SolutionProperties) = preSolution
-		HideSolutionNode = FALSE
-	EndGlobalSection
-	GlobalSection(ExtensibilityGlobals) = postSolution
-		SolutionGuid = {03F79E48-00DB-4348-9B97-3BE61E350CBC}
-	EndGlobalSection
-EndGlobal
+using OfficeOpenXml;
+using OpenQA.Selenium;
+using OpenQA.Selenium.Edge;
+using OpenQA.Selenium.Support.UI;
+using SeleniumExtras.WaitHelpers;
+using System;
+using System.IO;
+
+namespace ConsoleApp1
+{
+    internal class Program
+    {
+        static void Main(string[] args)
+        {
+            var driver = new EdgeDriver();
+            var link = "https://ec.europa.eu/tools/eudamed/#/screen/search-device?deviceStatusCode=refdata.device-model-status.on-the-market&submitted=true";
+
+            driver.Navigate().GoToUrl(link);
+
+            Program pr = new Program();
+
+            // Set a page load timeout (optional, but recommended)
+            driver.Manage().Timeouts().PageLoad = TimeSpan.FromSeconds(40);
+
+            // Create the Excel package and worksheet
+            ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
+            var filePath = Path.Combine(Directory.GetCurrentDirectory(), "ScrapedData3.xlsx");
+            Console.WriteLine($"The scraped data will be saved to: {filePath}");
+
+            using (var package = new ExcelPackage())
+            {
+                var sheet = package.Workbook.Worksheets.Add("ScrapedData3");
+                int rowIndex = 1; // Initialize row index
+
+                // Set page to 50 items per page
+                SetItemsPerPage(driver);
+
+                // Total number of pages to iterate
+                const int totalPages = 11663;
+
+                for (int currentPage = 1; currentPage <= totalPages; currentPage++)
+                {
+                    Console.WriteLine($"Scraping page {currentPage}...");
+
+                    // Scrape the current page and write data to Excel
+                    rowIndex = pr.Scrape(driver, sheet, rowIndex);
+
+                    // Save the data to the file after scraping the current page
+                    try
+                    {
+                        package.SaveAs(new FileInfo(filePath));
+                        Console.WriteLine($"Data successfully saved after page {currentPage}.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error saving file after page {currentPage}: {ex.Message}");
+                        break;
+                    }
+
+                    // If it's not the last page, navigate to the next page
+                    if (currentPage < totalPages)
+                    {
+                        Console.WriteLine($"Navigating to page {currentPage + 1}...");
+
+                        // Construct XPath for the next page button
+                        var nextPageButtonXPath = $"//button[@aria-label='Page number {currentPage + 1} ']";
+                        WebDriverWait wait = new WebDriverWait(driver, TimeSpan.FromSeconds(30));
+
+                        // Wait until the button for the next page is present
+                        var nextPageButton = wait.Until(d => d.FindElement(By.XPath(nextPageButtonXPath)));
+
+                        // Scroll to the next page button
+                        ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView(true);", nextPageButton);
+
+                        // Click to go to the next page
+                        nextPageButton.Click();
+
+                        bool isPageLoaded = false;
+                        int retryCount = 0;
+                        const int maxRetries = 3; // Limit the number of retries to avoid infinite loops
+
+                        while (!isPageLoaded && retryCount < maxRetries)
+                        {
+                            try
+                            {
+                                // Wait for the table to load and have rows
+                                WebDriverWait wait2= new WebDriverWait(driver, TimeSpan.FromSeconds(60));
+                                wait2.Until(d =>
+                                {
+                                    var table = d.FindElement(By.TagName("p-table"));
+                                    var tableRows = table.FindElements(By.CssSelector("tbody > tr"));
+                                    return tableRows.Count > 0; // Ensure rows are present
+                                });
+
+                                // If we reach here, the page is loaded successfully
+                                isPageLoaded = true;
+                                Console.WriteLine($"Page {currentPage + 1} loaded successfully.");
+                            }
+                            catch (WebDriverTimeoutException)
+                            {
+                                // If timeout occurs, increment retry count and reload the page
+                                retryCount++;
+                                Console.WriteLine($"Page {currentPage + 1} did not load. Retrying ({retryCount}/{maxRetries})...");
+
+                                // Reload the page by refreshing the browser
+                                driver.Navigate().Refresh();
+                            }
+                        }
+
+                        // Check if the page was successfully loaded after retries
+                        if (!isPageLoaded)
+                        {
+                            Console.WriteLine($"Failed to load page {currentPage + 1} after {maxRetries} retries. Skipping...");
+                            break; // Exit the loop if the page could not be loaded
+                        }
+
+                        //// Wait for the page table to update
+                        //wait.Until(d =>
+                        //{
+                        //    var table = d.FindElement(By.TagName("p-table"));
+                        //    var tableRows = table.FindElements(By.CssSelector("tbody > tr"));
+                        //    return tableRows.Count > 0; // Ensure rows are present
+                        //});
+
+                        //Console.WriteLine($"Page {currentPage + 1} loaded.");
+                    }
+                }
+            }
+        }
+
+        // Method to set the page to show 50 items per page
+        public static void SetItemsPerPage(EdgeDriver driver)
+        {
+            IJavaScriptExecutor js = (IJavaScriptExecutor)driver;
+            WebDriverWait wait = new WebDriverWait(driver, TimeSpan.FromSeconds(40));
+
+            // Wait for the dropdown trigger element to be visible and click it
+            Console.WriteLine("Waiting for the dropdown trigger to be visible...");
+            IWebElement dropdownTrigger = wait.Until(ExpectedConditions.ElementToBeClickable(By.ClassName("p-dropdown")));
+            js.ExecuteScript("arguments[0].scrollIntoView(true);", dropdownTrigger);
+            dropdownTrigger.Click();
+
+            // Wait for the option with aria-label='50' to become visible
+            Console.WriteLine("Waiting for the option to be visible...");
+            IWebElement dropdownOption = wait.Until(ExpectedConditions.ElementToBeClickable(By.CssSelector("[aria-label='50']")));
+            js.ExecuteScript("arguments[0].scrollIntoView(true);", dropdownOption);
+            dropdownOption.Click();
+
+            // Wait for the page to load with 50 items
+            Console.WriteLine("Waiting for the new page to load with 50 items...");
+            wait.Until(d =>
+            {
+                try
+                {
+                    // Find the table or the specific section where the items are located
+                    var table = d.FindElement(By.TagName("p-table")); // Update this selector to target the correct table element
+                    var rows = table.FindElements(By.CssSelector("tbody > tr")); // Adjust to match the row selector
+
+                    // Ensure the page is showing 50 items (rows) per page
+                    return rows.Count == 50;
+                }
+                catch (NoSuchElementException)
+                {
+                    return false; // Continue waiting if the table is not found
+                }
+            });
+
+            Console.WriteLine("The new page with 50 items has loaded successfully.");
+        }
+
+        // Method to scrape data from a page and save it to the Excel sheet
+        public int Scrape(EdgeDriver driver, ExcelWorksheet sheet, int rowIndex)
+        {
+            WebDriverWait wait = new WebDriverWait(driver, TimeSpan.FromSeconds(60));
+
+            // Wait until the p-table is visible
+            IWebElement table = wait.Until(d =>
+            {
+                try
+                {
+                    var element = d.FindElement(By.TagName("p-table"));
+                    return element.Displayed ? element : null; // Return only if displayed
+                }
+                catch (NoSuchElementException)
+                {
+                    return null; // Keep waiting if not found
+                }
+            });
+
+            // Get all the rows from the table
+            var rows = table.FindElements(By.CssSelector("tbody > tr"));
+
+            // Write the scraped data to Excel
+            foreach (var row in rows)
+            {
+                var cells = row.FindElements(By.CssSelector("td"));
+                for (int colIndex = 0; colIndex < cells.Count; colIndex++)
+                {
+                    sheet.Cells[rowIndex, colIndex + 1].Value = cells[colIndex].Text;
+                }
+                rowIndex++; // Move to the next row after writing data
+            }
+
+            return rowIndex; // Return the updated rowIndex to continue writing on the next row
+        }
+    }
+}
