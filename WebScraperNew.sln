@@ -12,84 +12,126 @@ namespace ConsoleApp1
     {
         static void Main(string[] args)
         {
-            var driver = new ChromeDriver();
-
-            var link = "https://ec.europa.eu/tools/eudamed/#/screen/search-device?deviceStatusCode=refdata.device-model-status.on-the-market&submitted=true";
-
-            driver.Navigate().GoToUrl(link);
-
-            // Set a page load timeout
-            driver.Manage().Timeouts().PageLoad = TimeSpan.FromSeconds(40);
-
-            // Click the close button to remove the criteria
-            ClickCloseButton(driver);
-
-            // Create the Excel package and worksheet
-            ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
-            var filePath = Path.Combine(Directory.GetCurrentDirectory(), "ScrapedData3.xlsx");
-            Console.WriteLine($"The scraped data will be saved to: {filePath}");
-
-            using (var package = new ExcelPackage())
+            try
             {
-                var sheet = package.Workbook.Worksheets.Add("ScrapedData3");
-                int rowIndex = 1; // Initialize row index
+                var options = new ChromeOptions();
+                options.AddArguments("--no-sandbox");
+                options.AddArguments("--disable-dev-shm-usage");
+                options.AddArguments("--remote-debugging-port=9222");
+                options.AddArguments("--disable-gpu");
+                options.AddArguments("--window-size=1920,1080");
 
-                // Set page to 50 items per page
-                SetItemsPerPage(driver);
+                var driver = new ChromeDriver(options);
+                string link = "https://ec.europa.eu/tools/eudamed/#/screen/search-device?deviceStatusCode=refdata.device-model-status.on-the-market&submitted=true";
+                driver.Navigate().GoToUrl(link);
+                driver.Manage().Timeouts().PageLoad = TimeSpan.FromSeconds(40);
 
-                // Total number of pages to iterate
-                const int totalPages = 11663;
+                ClickCloseButton(driver);
 
-                for (int currentPage = 1; currentPage <= totalPages; currentPage++)
+                ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
+                var filePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "ScrapedDataTable.xlsx");
+
+                using (var package = new ExcelPackage())
                 {
-                    Console.WriteLine($"Scraping page {currentPage}...");
+                    var sheet = package.Workbook.Worksheets.Add("ScrapedData");
+                    int rowIndex = 1;
 
-                    // Scrape the current page and write data to Excel
-                    rowIndex = Scrape(driver, sheet, rowIndex);
+                    SetItemsPerPage(driver);
+                    const int totalPages = 11663;
 
-                    // Save the data to the file after scraping the current page
-                    try
+                    for (int currentPage = 1; currentPage <= totalPages; currentPage++)
+                    {
+                        Console.WriteLine($"Scraping page {currentPage}...");
+                        bool success = false;
+
+                        while (!success)
+                        {
+                            try
+                            {
+                                rowIndex = Scrape(driver, sheet, rowIndex);
+                                success = true;
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"Scraping error on page {currentPage}: {ex.Message}");
+                                Console.WriteLine("Choose an option: [R]etry, [S]kip to next page, [E]xit:");
+                                string input = Console.ReadLine().ToUpper();
+
+                                if (input == "R")
+                                {
+                                    Console.WriteLine("Retrying...");
+                                }
+                                else if (input == "S")
+                                {
+                                    Console.WriteLine("Skipping to next page...");
+                                    success = true; // Move to next iteration
+                                }
+                                else if (input == "E")
+                                {
+                                    Console.WriteLine("Exiting...");
+                                    driver.Quit();
+                                    Environment.Exit(0);
+                                }
+                            }
+                        }
+
+                        try
+                        {
+                            package.SaveAs(new FileInfo(filePath));
+                            Console.WriteLine($"Data successfully saved after page {currentPage}.");
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Error saving file: {ex.Message}");
+                        }
+
+                        if (currentPage < totalPages)
+                        {
+                            NavigateToNextPage(driver, currentPage);
+                        }
+                    }
+
+                    if (sheet.Dimension != null)
                     {
                         package.SaveAs(new FileInfo(filePath));
-                        Console.WriteLine($"Data successfully saved after page {currentPage}.");
+                        Console.WriteLine($"Excel file successfully saved at: {filePath}");
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        Console.WriteLine($"Error saving file after page {currentPage}: {ex.Message}");
-                        break;
-                    }
-
-                    // If it's not the last page, navigate to the next page
-                    if (currentPage < totalPages)
-                    {
-                        NavigateToNextPage(driver, currentPage);
+                        Console.WriteLine("No data scraped. Excel file not created.");
                     }
                 }
-            }
 
-            // Close the browser
-            driver.Quit();
+                driver.Quit();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Critical Error: {ex.Message}");
+                Console.WriteLine("Choose an option: [R]etry, [E]xit:");
+                string input = Console.ReadLine().ToUpper();
+
+                if (input == "R")
+                {
+                    Main(args);
+                }
+                else
+                {
+                    Console.WriteLine("Exiting...");
+                    Environment.Exit(0);
+                }
+            }
         }
 
-        // Method to click the close button
         public static void ClickCloseButton(ChromeDriver driver)
         {
-            // Wait for the close button to be present
             WebDriverWait wait = new WebDriverWait(driver, TimeSpan.FromSeconds(60));
 
             try
             {
-                // Find the close button using XPath
                 var closeButton = wait.Until(ExpectedConditions.ElementExists(By.XPath("//i[contains(@class, 'btn-close') and @title='Click to remove criteria']")));
-
-                // Scroll to the button
                 IJavaScriptExecutor js = (IJavaScriptExecutor)driver;
                 js.ExecuteScript("arguments[0].scrollIntoView(true);", closeButton);
-
-                // Wait a moment for scrolling to complete
                 System.Threading.Thread.Sleep(500);
-
-                // Click the button
                 closeButton.Click();
 
                 Console.WriteLine("Close button clicked successfully.");
@@ -104,34 +146,36 @@ namespace ConsoleApp1
             }
         }
 
-        // Method to set the page to show 50 items per page
         public static void SetItemsPerPage(ChromeDriver driver)
         {
             IJavaScriptExecutor js = (IJavaScriptExecutor)driver;
             WebDriverWait wait = new WebDriverWait(driver, TimeSpan.FromSeconds(40));
 
-            // Click the dropdown to change page size
-            IWebElement dropdownTrigger = wait.Until(ExpectedConditions.ElementToBeClickable(By.ClassName("p-dropdown")));
-            js.ExecuteScript("arguments[0].scrollIntoView(true);", dropdownTrigger);
-            dropdownTrigger.Click();
-
-            // Select '50' from the dropdown
-            IWebElement dropdownOption = wait.Until(ExpectedConditions.ElementToBeClickable(By.CssSelector("[aria-label='50']")));
-            js.ExecuteScript("arguments[0].scrollIntoView(true);", dropdownOption);
-            dropdownOption.Click();
-
-            // Wait until the page updates with 50 items
-            wait.Until(d =>
+            try
             {
-                var table = d.FindElement(By.TagName("p-table"));
-                var rows = table.FindElements(By.CssSelector("tbody > tr"));
-                return rows.Count == 50;
-            });
+                IWebElement dropdownTrigger = wait.Until(ExpectedConditions.ElementToBeClickable(By.ClassName("p-dropdown")));
+                js.ExecuteScript("arguments[0].scrollIntoView(true);", dropdownTrigger);
+                dropdownTrigger.Click();
 
-            Console.WriteLine("Page set to 50 items per page.");
+                IWebElement dropdownOption = wait.Until(ExpectedConditions.ElementToBeClickable(By.CssSelector("[aria-label='50']")));
+                js.ExecuteScript("arguments[0].scrollIntoView(true);", dropdownOption);
+                dropdownOption.Click();
+
+                wait.Until(d =>
+                {
+                    var table = d.FindElement(By.TagName("p-table"));
+                    var rows = table.FindElements(By.CssSelector("tbody > tr"));
+                    return rows.Count == 50;
+                });
+
+                Console.WriteLine("Page set to 50 items per page.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error setting items per page: {ex.Message}");
+            }
         }
 
-        // Method to navigate to the next page
         public static void NavigateToNextPage(ChromeDriver driver, int currentPage)
         {
             try
@@ -143,37 +187,7 @@ namespace ConsoleApp1
                 ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView(true);", nextPageButton);
                 nextPageButton.Click();
 
-                bool isPageLoaded = false;
-                int retryCount = 0;
-                const int maxRetries = 3;
-
-                while (!isPageLoaded && retryCount < maxRetries)
-                {
-                    try
-                    {
-                        WebDriverWait wait2 = new WebDriverWait(driver, TimeSpan.FromSeconds(60));
-                        wait2.Until(d =>
-                        {
-                            var table = d.FindElement(By.TagName("p-table"));
-                            var tableRows = table.FindElements(By.CssSelector("tbody > tr"));
-                            return tableRows.Count > 0;
-                        });
-
-                        isPageLoaded = true;
-                        Console.WriteLine($"Page {currentPage + 1} loaded successfully.");
-                    }
-                    catch (WebDriverTimeoutException)
-                    {
-                        retryCount++;
-                        Console.WriteLine($"Retrying page {currentPage + 1} ({retryCount}/{maxRetries})...");
-                        driver.Navigate().Refresh();
-                    }
-                }
-
-                if (!isPageLoaded)
-                {
-                    Console.WriteLine($"Failed to load page {currentPage + 1}. Skipping...");
-                }
+                Console.WriteLine($"Navigated to page {currentPage + 1}.");
             }
             catch (Exception ex)
             {
@@ -181,33 +195,41 @@ namespace ConsoleApp1
             }
         }
 
-        // Method to scrape data from a page
         public static int Scrape(ChromeDriver driver, ExcelWorksheet sheet, int rowIndex)
         {
             WebDriverWait wait = new WebDriverWait(driver, TimeSpan.FromSeconds(60));
-            IWebElement table = wait.Until(d =>
-            {
-                try
-                {
-                    var element = d.FindElement(By.TagName("p-table"));
-                    return element.Displayed ? element : null;
-                }
-                catch (NoSuchElementException)
-                {
-                    return null;
-                }
-            });
 
-            var rows = table.FindElements(By.CssSelector("tbody > tr"));
-
-            foreach (var row in rows)
+            try
             {
-                var cells = row.FindElements(By.CssSelector("td"));
-                for (int colIndex = 0; colIndex < cells.Count; colIndex++)
+                IWebElement table = wait.Until(d =>
                 {
-                    sheet.Cells[rowIndex, colIndex + 1].Value = cells[colIndex].Text;
+                    try
+                    {
+                        var element = d.FindElement(By.TagName("p-table"));
+                        return element.Displayed ? element : null;
+                    }
+                    catch (NoSuchElementException)
+                    {
+                        return null;
+                    }
+                });
+
+                var rows = table.FindElements(By.CssSelector("tbody > tr"));
+
+                foreach (var row in rows)
+                {
+                    var cells = row.FindElements(By.CssSelector("td"));
+                    for (int colIndex = 0; colIndex < cells.Count; colIndex++)
+                    {
+                        sheet.Cells[rowIndex, colIndex + 1].Value = cells[colIndex].Text;
+                    }
+                    rowIndex++;
                 }
-                rowIndex++;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Scraping error: {ex.Message}");
+                throw;
             }
 
             return rowIndex;
